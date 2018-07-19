@@ -13,14 +13,18 @@
 #    You should have received a copy of the GNU Lesser General Public
 #    License along with DEAP. If not, see <http://www.gnu.org/licenses/>.
 
+from builtins import input
+
 import array
 import random
 import json
 
 import numpy as np
-from copy import copy
+import time
+import argparse
+import os
 
-from math import sqrt
+from math import sqrt, ceil
 
 from deap import algorithms
 from deap import base
@@ -29,58 +33,40 @@ from deap.benchmarks.tools import diversity, convergence, hypervolume
 from deap import creator
 from deap import tools
 
-from keras.models import save_model, load_model, clone_model
+from scoop import futures
 
-from model import quad_landing, get_actor, get_critic
+from model import quad_landing, nn, rnn, plot_population, test_agents
 
-MUTATION_RATE = 1.
+MUTATION_RATE = 0.7
 
 creator.create("Fitness", base.Fitness, weights=(-1.0, -1.0, -1.0))
-creator.create("Individual", array.array, fitness=creator.Fitness)
+creator.create("Individual", list, fitness=creator.Fitness)
 
 toolbox = base.Toolbox()
 
-# Problem definition
-# Functions zdt1, zdt2, zdt3, zdt6 have bounds [0, 1]
-BOUND_LOW, BOUND_UP = 0.0, 1.0
-
-# Functions zdt4 has bounds x1 = [0, 1], xn = [-5, 5], with n = 2, ..., 10
-# BOUND_LOW, BOUND_UP = [0.0] + [-5.0]*9, [1.0] + [5.0]*9
-
-# Functions zdt1, zdt2, zdt3 have 30 dimensions, zdt4 and zdt6 have 10
-NDIM = 30
-
-def uniform(low, up, size=None):
-    try:
-        return [random.uniform(a, b) for a, b in zip(low, up)]
-    except TypeError:
-        return [random.uniform(a, b) for a, b in zip([low] * size, [up] * size)]
-
-def nn_copy(nn_individual):
-    model_copy = clone_model(nn_individual[0])
-    model_copy.set_weights(nn_individual[0].get_weights())
-
-    nn_copy = creator.Individual()
-    nn_copy.append(model_copy)
-    nn_copy.fitness = copy(nn_individual.fitness)
-
-    return nn_copy
-
 def evalLanding(individual):
-    dyn = quad_landing(delay=3, noise=0.2)
+    # set noise paramters
+    # time delay range [1,4] time steps
+    # divegence sensor noise [0,0.15]s-1
+    # thrust time constant [0, 0.1]s
+    # time step [1/30, 1/50]s
+    dyn = quad_landing(delay=ceil(4*np.random.random_sample()),
+      noise=0.15*np.random.random_sample(),
+      thrust_tc=0.15*np.random.random_sample(),
+      dt=1/ceil(20*np.random.random_sample() + 30))
     
     h0 = [2., 5., 10.]
 
-    t_score = 0
-    h_score = 0
-    v_score = 0
+    t_score = 0.
+    h_score = 0.
+    v_score = 0.
 
     for i in range(len(h0)):
-        dyn.reset()
+        obs = dyn.reset()
         dyn.set_h0(h0[i])
         done = False
         while not done:
-            _, _, done, _ = dyn.step(-1.)#individual[0].predict(np.array([dyn.obs[0]]))[0][0])
+            obs, _, done, _ = dyn.step(individual[0].predict(obs))
 
         t = dyn.t
         h = dyn.y[0]
@@ -88,7 +74,7 @@ def evalLanding(individual):
 
         # penalize not landing, here only the hieght matters
         if t >= dyn.MAX_T or h >= dyn.MAX_H:
-            v = 10.
+            v = -10.
             t = dyn.MAX_T
         
         # don't differentiate hieght score between sucessful individuals
@@ -112,38 +98,26 @@ def evalLanding(individual):
 
 def cxSet(ind1, ind2):
     return ind1, ind2
-    
-def mutSet(individual):
-    """Mutation that pops or add an element."""
-    # trainable_count = int(np.sum([K.count_params(p) for p in set(individual[0].trainable_weights)]))
-    weights = individual[0].get_weights()
-    for i in range(len(weights)):
-        for j in range(len(weights[i])):
-            if random.random() < MUTATION_RATE:
-                # mutate value in range [-w - 0.01, 2w + 0.01]
-                weights[i][j] = 3*weights[i][j]*random.random() - weights[i][j] + (random.random()*0.02 - 0.01)
-    individual[0].set_weights(weights)
-    return individual,
 
-toolbox.unregister("clone")
-toolbox.register("clone", nn_copy)
+neural_type = ctrnn
 
-toolbox.register("actor", get_actor)
-toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.actor, 1)
+toolbox.register("individual", tools.initRepeat, creator.Individual, neural_type, 1)
 toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
 toolbox.register("evaluate", evalLanding)
 toolbox.register("mate", cxSet)
-toolbox.register("mutate", mutSet)
+toolbox.register("mutate", neural_type.mutSet)
 toolbox.register("select", tools.selNSGA2)
+
+toolbox.register("map", futures.map)
 
 def main(seed=None):
     random.seed(seed)
 
-    NGEN = 25
+    NGEN = 500
     MU = 100
-    CXPB = 0.
-    MUTPB = 0.
+    
+    log_interval = 25
 
     stats = tools.Statistics(lambda ind: ind.fitness.values)
     stats.register("avg", np.mean, axis=0)
@@ -155,13 +129,14 @@ def main(seed=None):
     logbook.header = "gen", "evals", "std", "min", "avg", "max"
     
     pop = toolbox.population(n=MU)
+    hof = tools.ParetoFront()
 
     # Evaluate the individuals with an invalid fitness
     invalid_ind = [ind for ind in pop if not ind.fitness.valid]
     fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
     for ind, fit in zip(invalid_ind, fitnesses):
         ind.fitness.values = fit
-
+        
     # This is just to assign the crowding distance to the individuals
     # no actual selection is done
     pop = toolbox.select(pop, len(pop))
@@ -169,44 +144,77 @@ def main(seed=None):
     record = stats.compile(pop)
     logbook.record(gen=0, evals=len(invalid_ind), **record)
     print(logbook.stream)
+    
+    hof.update(pop)
+    
+    log_dir = 'logs/{}/'.format(time.strftime('%y%m%d-%H%M%S'))
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
 
     # Begin the generational process
-    for gen in range(1, NGEN):
+    for gen in range(1, NGEN+1):
         # Vary the population
         offspring = tools.selTournamentDCD(pop, len(pop))
         offspring = [toolbox.clone(ind) for ind in offspring]
         
         for ind1, ind2 in zip(offspring[::2], offspring[1::2]):
-            if random.random() <= CXPB:
-                toolbox.mate(ind1, ind2)
-            
             toolbox.mutate(ind1)
             toolbox.mutate(ind2)
             del ind1.fitness.values, ind2.fitness.values
         
-        # Evaluate the individuals with an invalid fitness
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
-        for ind, fit in zip(invalid_ind, fitnesses):
+        # Revaluate the individuals in last population
+        fitnesses = toolbox.map(toolbox.evaluate, pop)
+        for ind, fit in zip(pop, fitnesses):
             ind.fitness.values = fit
+        
+        # Evaluate the new offspring
+        fitnesses = toolbox.map(toolbox.evaluate, offspring)
+        for ind, fit in zip(offspring, fitnesses):
+            ind.fitness.values = fit
+
+        plot_population(pop, offspring)
+        
+        # Update the hall of fame with the generated individuals
+        hof.update(offspring)
 
         # Select the next generation population
         pop = toolbox.select(pop + offspring, MU)
         record = stats.compile(pop)
-        logbook.record(gen=gen, evals=len(invalid_ind), **record)
+        logbook.record(gen=gen, evals=len(offspring)+len(pop), **record)
         print(logbook.stream)
+        
+        if gen % log_interval == 0 or gen == NGEN:
+            os.makedirs('{}{}'.format(log_dir, gen))
+            for i, agent in enumerate(pop):
+                agent[0].save_weights('{}{}/{}_weights.csv'.format(log_dir, gen, i), overwrite=True)
 
     print("Final population hypervolume is %f" % hypervolume(pop, [11.0, 11.0, 11.0]))
-
+    
+    os.makedirs('{}hof'.format(log_dir))
+    for i, agent in enumerate(hof):
+        agent[0].save_weights('{}hof/{}_weights.csv'.format(log_dir, i), overwrite=True)
+    
     return pop, logbook
         
 if __name__ == "__main__":
-    # with open("pareto_front/zdt1_front.json") as optimal_front_data:
-    #     optimal_front = json.load(optimal_front_data)
-    # Use 500 of the 1000 points in the json file
-    # optimal_front = sorted(optimal_front[i] for i in range(0, len(optimal_front), 2))
+    # parse input arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['evolve','train', 'test'], default='evolve')
+    #parser.add_argument('--env-name', type=str, default='BreakoutDeterministic-v4')
+    parser.add_argument('--weights', type=str, default=None)
+    parser.add_argument('--visualize', action='store_const', const=1, default=0)
+    args = parser.parse_args()
     
-    pop, stats = main()
+    if args.mode == 'evolve':
+        pop, stats = main()
+        
+    elif args.mode == 'test':
+        if args.weights is None:
+            raise ValueError('You must provide a model to train with the weights input')
+
+        test_agents(args.weights)
+
+    input('Press any key to exit')
     # pop.sort(key=lambda x: x.fitness.values)
     
     # print(stats)

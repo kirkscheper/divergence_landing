@@ -1,85 +1,41 @@
+from past.builtins import xrange
 
 import types
 import tempfile
 import time
 from collections import deque
 import numpy as np
-
-import keras.models
-from keras.models import Model
-from keras.layers import Dense, Flatten, Input, Concatenate
+import csv
 
 import gym
 from gym import spaces
+import random
 
-import matplotlib.pyplot as plt
-
-def make_keras_picklable():
-    def __getstate__(self):
-        model_str = ""
-        with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
-            keras.models.save_model(self, fd.name, overwrite=True)
-            model_str = fd.read()
-        d = { 'model_str': model_str }
-        return d
-
-    def __setstate__(self, state):
-        with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
-            fd.write(state['model_str'])
-            fd.flush()
-            model = keras.models.load_model(fd.name)
-        self.__dict__ = model.__dict__
-
-
-    cls = keras.models
-    cls.__getstate__ = __getstate__
-    cls.__setstate__ = __setstate__
-
-
-def get_actor():
-    #make_keras_picklable()
-    input = Input(shape=(2,), name='input')
-
-    x = Dense(8, activation='relu', bias_initializer='RandomNormal')(input)
-    x = Dense(1, activation='linear')(x)
-    actor = Model(inputs=input, outputs=x)
-    print(actor.summary())
-
-    # we don't optimize the model with Keras but to set to feedfoward mode
-    # we have to compile the model
-    actor.compile(optimizer='sgd', loss='mse')
-
-    return actor
-
-def get_critic(actor):
-    action_input = Input(shape=(2,), name='action_input')
-    input = Input(shape=(1,), name='input')
-
-    x = Concatenate()([action_input, input])
-    x = Dense(64, activation='relu')(x)
-    x = Dense(1, activation='linear')(x)
-    critic = Model(inputs=[action_input, input], outputs=x)
-
-    return critic, action_input
-
+import os
+from os import listdir
+from os.path import isfile, join
+                    
 class quad_landing(gym.Env):
     metadata = {
         'render.modes' : ['human', 'rgb_array'],
         'video.frames_per_second' : 100
     }
-    def __init__(self, delay=1, noise=0.1, visualize=False):
+    # delay is time delay in time steps
+    # noise is the std of divergence sensor noise
+    # thrust_tc is the motor thrust spin up time constant
+    def __init__(self, delay=1, noise=0.1, thrust_tc=0.025, dt=0.025, visualize=False):
         assert delay > 0
         assert noise >= 0.
 
         self.G = 9.81
         self.MAX_H = 15.
         self.MIN_H = 0.05
-        self.DT = 0.025
         self.MAX_T = 30.
 
+        self.DT = dt        
+        self.thrust_tc = thrust_tc
         self.visualize = visualize
-        self.delay=delay
-
+        self.delay = delay
         self.noise_sigma = noise    # applied to divergence
 
         self.viewer = None
@@ -89,7 +45,7 @@ class quad_landing(gym.Env):
 
         obs = self.reset()
 
-        self.action_space = spaces.Box(low=0., high=3*self.G, shape=(1,), dtype='float32')
+        self.action_space = spaces.Box(low=-0.9*self.G, high=1.5*self.G, shape=(1,), dtype='float32')
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=obs.shape, dtype='float32')
         
         if self.visualize:
@@ -108,25 +64,43 @@ class quad_landing(gym.Env):
     def get_observation(self):
         # compute current ground truth state parameters
         D = -self.y[1]/(self.y[0] if np.abs(self.y[0]) > 1e-5 else 1e-5)
-        D_dot = D - self.state[0]
+        D_dot = (D - self.state[0]) / self.DT
         self.state = [D, D_dot]
 
         # perform observation of state
         D += np.random.normal(0., self.noise_sigma)
-        D_dot = D - (self.obs[-1][0] if len(self.obs) > 0 else D)
+        if len(self.obs) > 0:
+          D_dot = (D - self.obs[-1][0]) / self.DT
+          # low pass filter D dot
+          #D_dot = self.obs[-1][1] + self.DT*((D - self.obs[-1][0]) / self.DT - self.obs[-1][1]) / (self.DT + 0.1)
+        else:
+          D_dot = 0.
+          
         self.obs.append([D, D_dot])
+        
+        # print self.obs[0], self.state
 
-        return np.array(self.obs[0]) # return delayed observation
+        return np.append(np.array(self.obs[0]), self.DT) # return delayed observation
 
-    def dy_dt(self, thrust):
+    # delay thrust and ass spin up function
+    def dy_dt(self, thrust_cmd):
         # action is delta thrust from hover in m/s2
-        action = thrust + self.G
-        action = np.clip(action, self.action_space.low, self.action_space.high)
+        thrust_cmd = np.clip(thrust_cmd, self.action_space.low, self.action_space.high)
+        # disable control for 1 second for RNN to settle
+        if self.t < 1.:
+            thrust_cmd = 0.
+        
+        # apply spin up to rotors
+        #print thrust_cmd, self.y[2], (1./0.05)*(thrust_cmd - self.y[2])
+        return np.array([self.y[1], self.y[2], (thrust_cmd - self.y[2])/(self.DT + self.thrust_tc)])
 
-        return np.array([self.y[1], action - self.G])
-
-    def step(self, action):
-        self.y += self.dy_dt(action)*self.DT
+    def step(self, action, wind=0.):
+        # if dt large run two integration steps to still have stable rotor spin up dynamics
+        if self.DT > 0.02:
+            self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT/2.
+            self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT/2.
+        else:
+            self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT
         self.t += self.DT
 
         if self.y[0] < self.MIN_H or self.y[0] > self.MAX_H or self.t >= self.MAX_T:
@@ -143,7 +117,7 @@ class quad_landing(gym.Env):
         else:
             reward = -1.
 
-        return self.get_observation(), reward, done, {} 
+        return self.get_observation(), reward, done, {}
 
     def reset(self):
         if self.visualize and self.viewer is not None:
@@ -151,8 +125,9 @@ class quad_landing(gym.Env):
             self.plot_data.set_ydata([])
 
         self.t = 0.
-        # state is [height, velocity]
-        self.y = np.array([5., 0.])
+        # state is [height, velocity, effective thrust]
+        self.y = np.array([5., 0., 0.])
+        self.obs.clear()
         return self.get_observation()
 
     def render(self, mode='human', close=False):
