@@ -5,16 +5,14 @@ import tempfile
 import time
 from collections import deque
 import numpy as np
-import csv
 
 import gym
 from gym import spaces
 import random
 
-import os
-from os import listdir
-from os.path import isfile, join
-                    
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
 class quad_landing(gym.Env):
     metadata = {
         'render.modes' : ['human', 'rgb_array'],
@@ -45,17 +43,21 @@ class quad_landing(gym.Env):
 
         obs = self.reset()
 
-        self.action_space = spaces.Box(low=-0.9*self.G, high=1.5*self.G, shape=(1,), dtype='float32')
+        self.action_space = spaces.Box(low=-0.8*self.G, high=0.5*self.G, shape=(1,), dtype='float32')
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=obs.shape, dtype='float32')
-        
+
         if self.visualize:
             fig = plt.figure()
             ax = fig.add_subplot(111)
             ax.set_xlabel('time [s]')
             ax.set_ylabel('D')
             ax.set_xlim([0,self.MAX_T])
-            ax.set_ylim([-0.1,2.])
-            self.plot_data, = ax.plot([],[])
+            ax.set_ylim([-0.5,3.])
+            
+            self.line_D_delayed = Line2D([], [], color='black')
+            self.line_D = Line2D([], [], color='red')
+            ax.add_line(self.line_D)
+            ax.add_line(self.line_D_delayed)
 
     def set_h0(self, h):
         self.y[0] = h
@@ -75,32 +77,33 @@ class quad_landing(gym.Env):
           #D_dot = self.obs[-1][1] + self.DT*((D - self.obs[-1][0]) / self.DT - self.obs[-1][1]) / (self.DT + 0.1)
         else:
           D_dot = 0.
-          
+
         self.obs.append([D, D_dot])
-        
+
         # print self.obs[0], self.state
 
-        return np.append(np.array(self.obs[0]), self.DT) # return delayed observation
+        return np.array(self.obs[0]) # return delayed observation
 
     # delay thrust and ass spin up function
     def dy_dt(self, thrust_cmd):
         # action is delta thrust from hover in m/s2
-        thrust_cmd = np.clip(thrust_cmd, self.action_space.low, self.action_space.high)
+        self.thrust_cmd = np.clip(thrust_cmd, self.action_space.low, self.action_space.high)[0]
+
         # disable control for 1 second for RNN to settle
         if self.t < 1.:
-            thrust_cmd = 0.
-        
+            self.thrust_cmd = 0.
+
         # apply spin up to rotors
         #print thrust_cmd, self.y[2], (1./0.05)*(thrust_cmd - self.y[2])
-        return np.array([self.y[1], self.y[2], (thrust_cmd - self.y[2])/(self.DT + self.thrust_tc)])
+        return np.array([self.y[1], self.y[2], (self.thrust_cmd - self.y[2])/(self.DT + self.thrust_tc)])
 
     def step(self, action, wind=0.):
         # if dt large run two integration steps to still have stable rotor spin up dynamics
-        if self.DT > 0.02:
-            self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT/2.
-            self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT/2.
-        else:
-            self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT
+        #if self.DT > 0.02:
+        #    self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT/2.
+        #    self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT/2.
+        #else:
+        self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT
         self.t += self.DT
 
         if self.y[0] < self.MIN_H or self.y[0] > self.MAX_H or self.t >= self.MAX_T:
@@ -121,8 +124,8 @@ class quad_landing(gym.Env):
 
     def reset(self):
         if self.visualize and self.viewer is not None:
-            self.plot_data.set_xdata([])
-            self.plot_data.set_ydata([])
+            self.line_D_delayed([],[])
+            self.line_D([],[])
 
         self.t = 0.
         # state is [height, velocity, effective thrust]
@@ -141,9 +144,9 @@ class quad_landing(gym.Env):
             from gym.envs.classic_control import rendering
 
             screen_width = 200
-            screen_height = 800
+            screen_height = 900
 
-            world_width = 6.
+            world_width = 10.
             self.render_scale = screen_height/world_width
 
             self.viewer = rendering.Viewer(screen_width, screen_height)
@@ -160,8 +163,8 @@ class quad_landing(gym.Env):
 
         self.quadTrans.set_translation(100, self.y[0]*self.render_scale)
 
-        self.plot_data.set_xdata(np.append(self.plot_data.get_xdata(), self.t))
-        self.plot_data.set_ydata(np.append(self.plot_data.get_ydata(), self.obs[0]))
+        self.line_D_delayed.set_data(np.append(self.line_D_delayed.get_xdata(), self.t), np.append(self.line_D_delayed.get_ydata(), self.obs[0][0]))
+        self.line_D.set_data(np.append(self.line_D.get_xdata(), self.t), np.append(self.line_D.get_ydata(), self.obs[-1][0]))
         plt.pause(0.001)
         #self.line.append([self.y[1], self.y[0]])
 

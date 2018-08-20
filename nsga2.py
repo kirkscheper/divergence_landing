@@ -35,14 +35,21 @@ from deap import tools
 
 from scoop import futures
 
-from model import quad_landing, nn, rnn, plot_population, test_agents
+from model import quad_landing
+from nn import nn, rnn, ctrnn
+from test import plot_population, test_agents
 
-MUTATION_RATE = 0.7
+MUTATION_RATE = 0.5
 
 creator.create("Fitness", base.Fitness, weights=(-1.0, -1.0, -1.0))
 creator.create("Individual", list, fitness=creator.Fitness)
 
 toolbox = base.Toolbox()
+
+def mutSet(individual):
+    """Mutation that pops or add an element."""
+    individual[0].mutate(MUTATION_RATE)
+    return individual,
 
 def evalLanding(individual):
     # set noise paramters
@@ -52,10 +59,11 @@ def evalLanding(individual):
     # time step [1/30, 1/50]s
     dyn = quad_landing(delay=ceil(4*np.random.random_sample()),
       noise=0.15*np.random.random_sample(),
-      thrust_tc=0.15*np.random.random_sample(),
-      dt=1/ceil(20*np.random.random_sample() + 30))
+      thrust_tc=0.15*np.random.random_sample()
+      #,dt=1/ceil(20*np.random.random_sample() + 30)
+      )
     
-    h0 = [2., 5., 10.]
+    h0 = [2., 5., 8.]
 
     t_score = 0.
     h_score = 0.
@@ -63,10 +71,14 @@ def evalLanding(individual):
 
     for i in range(len(h0)):
         obs = dyn.reset()
+        individual[0].reset()
         dyn.set_h0(h0[i])
         done = False
+
+        energy = 0.
         while not done:
-            obs, _, done, _ = dyn.step(individual[0].predict(obs))
+            obs, _, done, _ = dyn.step(individual[0].predict(obs, dyn.DT))
+            energy += dyn.thrust_cmd + dyn.G
 
         t = dyn.t
         h = dyn.y[0]
@@ -74,15 +86,15 @@ def evalLanding(individual):
 
         # penalize not landing, here only the hieght matters
         if t >= dyn.MAX_T or h >= dyn.MAX_H:
-            v = -10.
+            v = -2.
             t = dyn.MAX_T
-        
+
         # don't differentiate hieght score between sucessful individuals
         if h <= dyn.MIN_H:
             h = 0.
             # don't differentiate velocity score between sucessful individuals
-            if np.abs(v) <= 0.05:
-                v = 0.
+            #if np.abs(v) <= 0.05:
+            #    v = 0.
 
         # penalize high speed crashing, not a viable solution
         if v < -2.:
@@ -91,7 +103,7 @@ def evalLanding(individual):
 
         t_score += t
         h_score += h
-        v_score += np.abs(v)
+        v_score += v*v #np.abs(v)
 
     # minimize time to end of sim, final height and velocity
     return t_score, h_score, v_score
@@ -99,14 +111,14 @@ def evalLanding(individual):
 def cxSet(ind1, ind2):
     return ind1, ind2
 
-neural_type = ctrnn
+neural_type = rnn    # nn. rnn, ctrnn
 
 toolbox.register("individual", tools.initRepeat, creator.Individual, neural_type, 1)
 toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
 toolbox.register("evaluate", evalLanding)
 toolbox.register("mate", cxSet)
-toolbox.register("mutate", neural_type.mutSet)
+toolbox.register("mutate", mutSet)
 toolbox.register("select", tools.selNSGA2)
 
 toolbox.register("map", futures.map)
@@ -114,9 +126,9 @@ toolbox.register("map", futures.map)
 def main(seed=None):
     random.seed(seed)
 
-    NGEN = 500
+    NGEN = 1000
     MU = 100
-    
+
     log_interval = 25
 
     stats = tools.Statistics(lambda ind: ind.fitness.values)
@@ -166,7 +178,7 @@ def main(seed=None):
         fitnesses = toolbox.map(toolbox.evaluate, pop)
         for ind, fit in zip(pop, fitnesses):
             ind.fitness.values = fit
-        
+
         # Evaluate the new offspring
         fitnesses = toolbox.map(toolbox.evaluate, offspring)
         for ind, fit in zip(offspring, fitnesses):
@@ -182,18 +194,19 @@ def main(seed=None):
         record = stats.compile(pop)
         logbook.record(gen=gen, evals=len(offspring)+len(pop), **record)
         print(logbook.stream)
-        
+
         if gen % log_interval == 0 or gen == NGEN:
             os.makedirs('{}{}'.format(log_dir, gen))
             for i, agent in enumerate(pop):
                 agent[0].save_weights('{}{}/{}_weights.csv'.format(log_dir, gen, i), overwrite=True)
 
+    plot_population(pop)
     print("Final population hypervolume is %f" % hypervolume(pop, [11.0, 11.0, 11.0]))
-    
+
     os.makedirs('{}hof'.format(log_dir))
     for i, agent in enumerate(hof):
         agent[0].save_weights('{}hof/{}_weights.csv'.format(log_dir, i), overwrite=True)
-    
+
     return pop, logbook
         
 if __name__ == "__main__":
