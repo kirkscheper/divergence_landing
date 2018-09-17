@@ -21,7 +21,7 @@ class quad_landing(gym.Env):
     # delay is time delay in time steps
     # noise is the std of divergence sensor noise
     # thrust_tc is the motor thrust spin up time constant
-    def __init__(self, delay=1, noise=0.1, thrust_tc=0.025, dt=0.025, visualize=False):
+    def __init__(self, delay=1, noise=0.1, thrust_tc=0.05, dt=0.025, visualize=False):
         assert delay > 0
         assert noise >= 0.
 
@@ -65,18 +65,15 @@ class quad_landing(gym.Env):
 
     def get_observation(self):
         # compute current ground truth state parameters
-        D = -self.y[1]/(self.y[0] if np.abs(self.y[0]) > 1e-5 else 1e-5)
+        D = -self.y[1]/(self.y[0] if abs(self.y[0]) > 1e-5 else 1e-5)
         D_dot = (D - self.state[0]) / self.DT
-        self.state = [D, D_dot]
+        self.state[:] = [D, D_dot]
 
         # perform observation of state
         D += np.random.normal(0., self.noise_sigma)
-        if len(self.obs) > 0:
-          D_dot = (D - self.obs[-1][0]) / self.DT
-          # low pass filter D dot
-          #D_dot = self.obs[-1][1] + self.DT*((D - self.obs[-1][0]) / self.DT - self.obs[-1][1]) / (self.DT + 0.1)
-        else:
-          D_dot = 0.
+        D_dot = (D - self.obs[-1][0]) / self.DT
+        # low pass filter D dot
+        #D_dot = self.obs[-1][1] + self.DT*((D - self.obs[-1][0]) / self.DT - self.obs[-1][1]) / (self.DT + 0.1)
 
         self.obs.append([D, D_dot])
 
@@ -87,11 +84,17 @@ class quad_landing(gym.Env):
     # delay thrust and ass spin up function
     def dy_dt(self, thrust_cmd):
         # action is delta thrust from hover in m/s2
-        self.thrust_cmd = np.clip(thrust_cmd, self.action_space.low, self.action_space.high)[0]
-
+        #self.thrust_cmd = np.clip(thrust_cmd, self.action_space.low, self.action_space.high)[0]
         # disable control for 1 second for RNN to settle
         if self.t < 1.:
             self.thrust_cmd = 0.
+        else:
+            if thrust_cmd > self.action_space.high:
+                self.thrust_cmd = self.action_space.high
+            elif thrust_cmd < self.action_space.low:
+                self.thrust_cmd = self.action_space.low
+            else:
+                self.thrust_cmd = thrust_cmd
 
         # apply spin up to rotors
         #print thrust_cmd, self.y[2], (1./0.05)*(thrust_cmd - self.y[2])
@@ -106,19 +109,19 @@ class quad_landing(gym.Env):
         self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT
         self.t += self.DT
 
-        if self.y[0] < self.MIN_H or self.y[0] > self.MAX_H or self.t >= self.MAX_T:
+        if self.y[0] < self.MIN_H or self.t >= self.MAX_T or self.y[0] > self.MAX_H:
+            if self.y[0] < self.MIN_H:
+                self.y[0] = self.MIN_H
+            elif self.y[0] > self.MAX_H:
+                self.y[0] = self.MAX_H
+
+            reward = 1/(self.t*self.y[1]*self.y[1]+0.01) - self.y[0]
             done = True
         else:
+            reward = -1.
             done = False
 
-        if self.y[0] < 0.:
-            self.y[0] = 0.
-
-        if done:
-            reward = 1/(self.t*self.y[1]*self.y[1]+0.01) - self.y[0]
-            #print reward,self.t,self.y[1]
-        else:
-            reward = -1.
+        #print reward,self.t,self.y[1]
 
         return self.get_observation(), reward, done, {}
 
@@ -131,6 +134,7 @@ class quad_landing(gym.Env):
         # state is [height, velocity, effective thrust]
         self.y = np.array([5., 0., 0.])
         self.obs.clear()
+        self.obs.append([0.,0.])
         return self.get_observation()
 
     def render(self, mode='human', close=False):

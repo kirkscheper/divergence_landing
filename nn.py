@@ -13,11 +13,17 @@ def sigmoid(x):
 def relu(x):
     return np.maximum(x, 0.)
 
-# generate random value in range [-w - 0.1, 2w + 0.1]
+# generate random value in range [-w - 0.05, 2w + 0.05]
 def perturb(x):
-    return (3.*random.random() - 1.)*x + (2.*random.random() - 1.)*0.1
+    #return x + (2.*random.random() - 1.)*x + (2.*random.random() - 1.)*0.05
+    return (3.*random.random() - 1.)*x + (2.*random.random() - 1.)*0.05
 
-def load_nn(filename):
+# generate random value in range [-0.05, 2w + 0.05]
+def perturb_u(x):
+    val = 2.*random.random()*x + random.random()*0.05
+    return val
+
+def load_nn(filename, print_weights=False):
     with open(filename, 'r') as csvfile:
         reader = csv.reader(csvfile, delimiter=' ')
 
@@ -33,22 +39,24 @@ def load_nn(filename):
     else:
         raise AssertionError('%s is not a known neural network type', type)
 
-    network.load_weights(filename)
+    network.load_weights(filename, print_weights)
     return network
 
 ########################## NN ##########################
 class nn(object):
     # generate array of floats that represent nerual weights
-    def __init__(self, shape=[2,8,1]):
+    def __init__(self, shape=[2,8,1], act_func=relu):
         self.nn_shape = shape
+        self.act_func = act_func
 
         # initialise weights including the bias neurons
         self.weights = np.array([np.zeros([self.nn_shape[layer], self.nn_shape[layer+1]]) for layer, _ in enumerate(self.nn_shape[:-1])])
-        self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
+        self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
-        for layer_nr, _ in enumerate(self.nn_shape[:-1]):
-            self.weights[layer_nr] = 2*np.random.rand(self.nn_shape[layer_nr], self.nn_shape[layer_nr+1]) - 1.  # uniform distribution [-1,1]
-            self.bias[layer_nr] = 2*np.random.rand(self.nn_shape[layer_nr+1]) - 1.                              # uniform distribution [-1,1]
+        for layer_nr, layer_shape in enumerate(self.nn_shape[:-1]):
+            self.weights[layer_nr] = np.random.rand(layer_shape, self.nn_shape[layer_nr+1]) - .5  # uniform distribution [-0.5,0.5]
+        for layer_nr, layer_shape in enumerate(self.nn_shape):
+            self.bias[layer_nr] = np.random.rand(layer_shape) - .5                              # uniform distribution [-0.5,0.5]
 
     def reset(self):
         # nothing to see here
@@ -56,16 +64,17 @@ class nn(object):
 
     def predict(self, inputs, dt):
         activation = np.array([np.zeros(self.nn_shape[layer]) for layer, _ in enumerate(self.nn_shape)])
+
         # set input activation
-        activation[0][:] = np.array(inputs[:self.nn_shape[0]])
+        activation[0][:] = np.array(inputs[:self.nn_shape[0]]) + self.bias[0]
 
         # Feeforward network
         for layer_nr, weights_layer in enumerate(self.weights):
-            activation[layer_nr+1][:] = activation[layer_nr].dot(weights_layer) + self.bias[layer_nr]
+            activation[layer_nr+1][:] = activation[layer_nr].dot(weights_layer) + self.bias[layer_nr+1]
 
             # apply relu activation function to hidden layers
-            if layer_nr < len(self.weights)-1:
-                activation[layer_nr+1][:] = relu(activation[layer_nr+1])
+            if layer_nr + 1 < len(self.weights):
+                activation[layer_nr+1][:] = self.act_func(activation[layer_nr+1])
 
         return activation[-1]
 
@@ -78,7 +87,7 @@ class nn(object):
             for b in self.bias:
                 np.savetxt(fp, b, delimiter=' ')
 
-    def load_weights(self, filename):
+    def load_weights(self, filename, print_weights=True):
         with open(filename, 'r') as csvfile:
             reader = csv.reader(csvfile, delimiter=' ')
 
@@ -91,7 +100,7 @@ class nn(object):
             self.nn_shape = [int(i) for i in next(reader)]  # input, hidden layers, output layer
 
             self.weights = np.array([np.zeros([self.nn_shape[layer], self.nn_shape[layer+1]]) for layer, _ in enumerate(self.nn_shape[:-1])])
-            self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
+            self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
             layer = 0
             neuron = 0
@@ -99,53 +108,62 @@ class nn(object):
             for row in reader:
                 if parameter == 0:
                     self.weights[layer][neuron] = np.array(row)
+                    if print_weights: print '{'+ "".join("%.6f," % float(x) for x in row) + '},'
                     neuron += 1
                     if neuron == self.nn_shape[layer]:
                         neuron = 0
                         layer += 1
+                        if print_weights: print
                     if layer == len(self.weights):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
+                        if print_weights: print
                 else:
                     self.bias[layer][neuron] = np.array(row)
                     neuron += 1
-                    if neuron == self.nn_shape[layer+1]:
+                    if neuron == self.nn_shape[layer]:
+                        if print_weights: print '{'+ "".join("%.6f," % float(x) for x in self.bias[layer]) + '};'
                         neuron = 0
                         layer += 1
                     if layer == len(self.bias):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
 
     def mutate(self, mutation_rate=1.):
-        for layer_nr, _ in enumerate(self.nn_shape[:-1]):
-            for neuron in xrange(self.nn_shape[layer_nr]):
-                for connection in xrange(self.nn_shape[layer_nr+1]):
-                    if random.random() <= mutation_rate:
-                        self.weights[layer_nr][neuron][connection] = perturb(self.weights[layer_nr][neuron][connection])
-                    if neuron == 0 and random.random() <= mutation_rate:
-                        self.bias[layer_nr][connection] = perturb(self.bias[layer_nr][connection])
+        for layer_nr, s in enumerate(self.nn_shape):
+            for neuron in xrange(s):
+                if random.random() <= mutation_rate:
+                    self.bias[layer_nr][neuron] = perturb(self.bias[layer_nr][neuron])
+                if layer_nr + 1 < len(self.nn_shape):
+                    for connection in xrange(self.nn_shape[layer_nr+1]):
+                        if random.random() <= mutation_rate:
+                            self.weights[layer_nr][neuron][connection] = perturb(self.weights[layer_nr][neuron][connection])
 
 ########################## RNN ##########################
 class rnn(nn):
     # generate array of floats that represent nerual weights
-    def __init__(self, shape=[2,8,1]):
+    def __init__(self, shape=[2,8,1], act_func=relu):
         self.nn_shape = shape
+        self.act_func = act_func
 
         # define weight and persistent activations
         self.weights = np.array([np.zeros([self.nn_shape[layer], self.nn_shape[layer+1]]) for layer, _ in enumerate(self.nn_shape[:-1])])
-        self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
-        self.recurrent_weights = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
+        self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape])
+        self.recurrent_weights = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
-        self.prev_activation = np.array([np.zeros(self.nn_shape[layer]) for layer, _ in enumerate(self.nn_shape)])
+        self.prev_activation = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
         # initialise weights including the bias and recurrent weights
-        for layer_nr, _ in enumerate(self.nn_shape[:-1]):
-            self.weights[layer_nr] = 2*np.random.rand(self.nn_shape[layer_nr], self.nn_shape[layer_nr+1]) - 1.  # uniform distribution [-1,1]
-            self.bias[layer_nr] = 2*np.random.rand(self.nn_shape[layer_nr+1]) - 1.                              # uniform distribution [-1,1]
-            self.recurrent_weights[layer_nr] = 2*np.random.rand(self.nn_shape[layer_nr+1]) - 1.                 # uniform distribution [-1,1]
+        for layer_nr, layer_shape in enumerate(self.nn_shape[:-1]):
+            self.weights[layer_nr] = np.random.rand(layer_shape, self.nn_shape[layer_nr+1]) - .5  # uniform distribution [-0.5,0.5]
+        for layer_nr, layer_shape in enumerate(self.nn_shape):
+            self.bias[layer_nr] = np.random.rand(layer_shape) - .5                              # uniform distribution [-0.5,0.5]
+            self.recurrent_weights[layer_nr] = np.random.rand(layer_shape) - .5                 # uniform distribution [-0.5,0.5]
 
     def reset(self):
-        self.prev_activation = np.array([np.zeros(self.nn_shape[layer]) for layer, _ in enumerate(self.nn_shape)])
+        self.prev_activation.fill(0)
 
         # try to initialize network with zero inputs
         for _ in xrange(20):
@@ -154,22 +172,19 @@ class rnn(nn):
     # dt should be in s
     def predict(self, inputs, dt):
         # activations include bias
-        activation = np.array([np.zeros(self.nn_shape[layer]) for layer, _ in enumerate(self.nn_shape)])
+        activation = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
         # assign inputs
-        activation[0][:] = np.array(inputs[:self.nn_shape[0]])
+        activation[0][:] = np.array(inputs[:self.nn_shape[0]]) + self.bias[0] + self.recurrent_weights[0]*self.prev_activation[0]
 
          # compute new activation
         for layer_nr, weights_layer in enumerate(self.weights):
-            # compute feedforward activation
-            activation[layer_nr+1][:] = activation[layer_nr].dot(weights_layer) + self.bias[layer_nr]
-
-            # add recurrent activation
-            activation[layer_nr+1] += self.recurrent_weights[layer_nr]*self.prev_activation[layer_nr+1]# * 1e3 / dt
+            # compute activation
+            activation[layer_nr+1][:] = activation[layer_nr].dot(weights_layer) + self.bias[layer_nr+1] + self.recurrent_weights[layer_nr+1]*self.prev_activation[layer_nr+1]
 
             # apply relu activation function to hidden layers
-            if layer_nr < len(self.weights)-1:
-                activation[layer_nr+1][:] = relu(activation[layer_nr+1])
+            if layer_nr + 1 < len(self.weights):
+                activation[layer_nr+1][:] = self.act_func(activation[layer_nr+1])
 
         self.prev_activation = np.copy(activation)
 
@@ -186,7 +201,7 @@ class rnn(nn):
             for r in self.recurrent_weights:
                 np.savetxt(fp, r, delimiter=' ')
 
-    def load_weights(self, filename):
+    def load_weights(self, filename, print_weights=False):
         with open(filename, 'r') as csvfile:
             reader = csv.reader(csvfile, delimiter=' ')
 
@@ -199,8 +214,8 @@ class rnn(nn):
             self.nn_shape = [int(i) for i in next(reader)]  # input, hidden layers, output layer
 
             self.weights = np.array([np.zeros([self.nn_shape[layer], self.nn_shape[layer+1]]) for layer, _ in enumerate(self.nn_shape[:-1])])
-            self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
-            self.recurrent_weights = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
+            self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape])
+            self.recurrent_weights = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
             layer = 0
             neuron = 0
@@ -208,70 +223,79 @@ class rnn(nn):
             for row in reader:
                 if parameter == 0:
                     self.weights[layer][neuron] = np.array(row)
+                    if print_weights: print '{'+ "".join("%.6f," % float(x) for x in row) + '},'
                     neuron += 1
                     if neuron == self.nn_shape[layer]:
                         neuron = 0
                         layer += 1
+                        if print_weights: print
                     if layer == len(self.weights):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
+                        if print_weights: print
                 elif parameter == 1:
                     self.bias[layer][neuron] = np.array(row)
                     neuron += 1
-                    if neuron == self.nn_shape[layer+1]:
+                    if neuron == self.nn_shape[layer]:
+                        if print_weights: print '{'+ "".join("%.6f," % float(x) for x in self.bias[layer]) + '};'
                         neuron = 0
                         layer += 1
                     if layer == len(self.bias):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
+                        if print_weights: print
                 else:
                     self.recurrent_weights[layer][neuron] = np.array(row)
                     neuron += 1
-                    if neuron == self.nn_shape[layer+1]:
+                    if neuron == self.nn_shape[layer]:
+                        if print_weights: print '{'+ "".join("%.6f," % float(x) for x in self.recurrent_weights[layer]) + '},'
                         neuron = 0
                         layer += 1
                     if layer == len(self.recurrent_weights):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
 
     def mutate(self, mutation_rate=1.):
-        for layer_nr, _ in enumerate(self.nn_shape[:-1]):
-            for neuron in xrange(self.nn_shape[layer_nr]):
-                # mutate value in range [-w - 0.1, 2w + 0.1]
-                for connection in xrange(self.nn_shape[layer_nr+1]):
-                    if random.random() <= mutation_rate:
-                        self.weights[layer_nr][neuron][connection] = perturb(self.weights[layer_nr][neuron][connection])
-                    if neuron == 0:
+        for layer_nr, s in enumerate(self.nn_shape):
+            for neuron in xrange(s):
+                if random.random() <= mutation_rate:
+                    self.bias[layer_nr][neuron] = perturb(self.bias[layer_nr][neuron])
+                if random.random() <= mutation_rate:
+                    self.recurrent_weights[layer_nr][neuron] = perturb(self.recurrent_weights[layer_nr][neuron])
+                if (layer_nr + 1 < len(self.nn_shape)):
+                    for connection in xrange(self.nn_shape[layer_nr+1]):
                         if random.random() <= mutation_rate:
-                            self.bias[layer_nr][connection] = perturb(self.bias[layer_nr][connection])
-                        if random.random() <= mutation_rate:
-                            self.recurrent_weights[layer_nr][connection] = perturb(self.recurrent_weights[layer_nr][connection])
+                            # mutate value in range [-w - 0.1, 2w + 0.1]
+                            self.weights[layer_nr][neuron][connection] = perturb(self.weights[layer_nr][neuron][connection])
 
 ########################## CTRNN ##########################
 class ctrnn(rnn):
     # generate array of floats that represent nerual weights
-    def __init__(self, shape=[2,8,1]):
+    def __init__(self, shape=[2,8,1], act_func=np.tanh):
         self.nn_shape = shape
+        self.act_func = act_func
 
         # define weight and persistent activations
         self.weights = np.array([np.zeros([self.nn_shape[layer], self.nn_shape[layer+1]]) for layer, _ in enumerate(self.nn_shape[:-1])])
         self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape[:-1]])
-        self.recurrent_weights = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
         self.time_const = np.array([np.zeros(neurons) for neurons in self.nn_shape])
+        self.gain = np.array([np.zeros(neurons) for neurons in self.nn_shape[:-1]])
 
-        self.prev_activation = np.array([np.zeros(self.nn_shape[layer]) for layer, _ in enumerate(self.nn_shape)])
+        self.prev_activation = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
         # initialise weights including the bias and recurrent weights
-        for layer_nr, _ in enumerate(self.nn_shape[:-1]):
-            self.weights[layer_nr][:] = 2*np.random.rand(self.nn_shape[layer_nr], self.nn_shape[layer_nr+1]) - 1.  # uniform distribution [-1,1]
-            self.bias[layer_nr][:] = 2*np.random.rand(self.nn_shape[layer_nr]) - 1.                                # uniform distribution [-1,1]
-            self.recurrent_weights[layer_nr][:] = 2*np.random.rand(self.nn_shape[layer_nr+1]) - 1.                 # uniform distribution [-1,1]
-            self.time_const[layer_nr][:] = np.random.rand(self.nn_shape[layer_nr])                                 # uniform distribution [ 0,1]
-
-        self.time_const[-1][:] = np.random.rand(self.nn_shape[-1])                                                 # uniform distribution [ 0,1]
+        for layer_nr, layer_shape in enumerate(self.nn_shape[:-1]):
+            self.weights[layer_nr][:] = np.random.rand(layer_shape, self.nn_shape[layer_nr+1]) - 1.  # uniform distribution [-0.5,0.5]
+            self.bias[layer_nr][:] = np.random.rand(layer_shape) - 1.                                # uniform distribution [-0.5,0.5]
+            self.gain[layer_nr][:] = np.random.rand(layer_shape)                          # uniform distribution [ 0,1]
+        for layer_nr, layer_shape in enumerate(self.nn_shape):
+            self.time_const[layer_nr][:] = np.random.rand(layer_shape)                          # uniform distribution [ 0,1]
 
     def predict(self, inputs, dt):
-        activation = np.array([np.zeros(self.nn_shape[layer]) for layer, _ in enumerate(self.nn_shape)])
+        activation = np.array([np.zeros(neurons) for neurons in self.nn_shape])
 
         # incorporate new inputs
         derviative = (np.array(inputs[:self.nn_shape[0]]) - self.prev_activation[0]) / (self.time_const[0] + dt)
@@ -279,14 +303,11 @@ class ctrnn(rnn):
 
         # compute new activation
         for layer_nr, weights_layer in enumerate(self.weights):
-            derviative = (sigmoid(activation[layer_nr] + self.bias[layer_nr]).dot(weights_layer) - self.prev_activation[layer_nr+1]) / (self.time_const[layer_nr+1] + dt)
+            derviative = (self.act_func(self.gain[layer_nr]*(activation[layer_nr] + self.bias[layer_nr])).dot(weights_layer) - self.prev_activation[layer_nr+1]) / (self.time_const[layer_nr+1] + dt)
             activation[layer_nr+1][:] = self.prev_activation[layer_nr+1] + dt*derviative
 
         self.prev_activation = np.copy(activation)
 
-        #print 'activation', activation
-        #print
-        #quit(0)
         return activation[-1]
 
     def save_weights(self, filename, overwrite=False):
@@ -297,12 +318,12 @@ class ctrnn(rnn):
                 np.savetxt(fp, w, delimiter=' ')
             for b in self.bias:
                 np.savetxt(fp, b, delimiter=' ')
-            for r in self.recurrent_weights:
-                np.savetxt(fp, r, delimiter=' ')
             for t in self.time_const:
                 np.savetxt(fp, t, delimiter=' ')
+            for g in self.gain:
+                np.savetxt(fp, g, delimiter=' ')
 
-    def load_weights(self, filename):
+    def load_weights(self, filename, print_weights=False):
         with open(filename, 'r') as csvfile:
             reader = csv.reader(csvfile, delimiter=' ')
 
@@ -316,8 +337,8 @@ class ctrnn(rnn):
 
             self.weights = np.array([np.zeros([self.nn_shape[layer], self.nn_shape[layer+1]]) for layer, _ in enumerate(self.nn_shape[:-1])])
             self.bias = np.array([np.zeros(neurons) for neurons in self.nn_shape[:-1]])
-            self.recurrent_weights = np.array([np.zeros(neurons) for neurons in self.nn_shape[1:]])
             self.time_const = np.array([np.zeros(neurons) for neurons in self.nn_shape])
+            self.gain = np.array([np.zeros(neurons) for neurons in self.nn_shape[:-1]])
 
             layer = 0
             neuron = 0
@@ -325,56 +346,75 @@ class ctrnn(rnn):
             for row in reader:
                 if parameter == 0:
                     self.weights[layer][neuron] = np.array(row)
+                    if print_weights: print '{'+ "".join("%.6f," % float(x) for x in row) + '},'
                     neuron += 1
                     if neuron == self.nn_shape[layer]:
                         neuron = 0
                         layer += 1
+                        if print_weights: print
                     if layer == len(self.weights):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
+                        if print_weights: print
                 elif parameter == 1:
                     self.bias[layer][neuron] = np.array(row)
                     neuron += 1
                     if neuron == self.nn_shape[layer]:
+                        if print_weights: print '{'+ "".join("%.6f," % float(x) for x in self.bias[layer]) + '};'
                         neuron = 0
                         layer += 1
                     if layer == len(self.bias):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
+                        if print_weights: print
                 elif parameter == 2:
-                    self.recurrent_weights[layer][neuron] = np.array(row)
-                    neuron += 1
-                    if neuron == self.nn_shape[layer+1]:
-                        neuron = 0
-                        layer += 1
-                    if layer == len(self.recurrent_weights):
-                        layer = 0
-                        parameter += 1
-                else:
                     self.time_const[layer][neuron] = np.array(row)
                     neuron += 1
                     if neuron == self.nn_shape[layer]:
+                        if print_weights: print '{'+ "".join("%.6f," % float(x) for x in self.time_const[layer]) + '};'
                         neuron = 0
                         layer += 1
                     if layer == len(self.time_const):
                         layer = 0
                         parameter += 1
+                        if print_weights: print
+                elif parameter == 3:
+                    self.gain[layer][neuron] = np.array(row)
+                    neuron += 1
+                    if neuron == self.nn_shape[layer]:
+                        if print_weights: print '{'+ "".join("%.6f," % float(x) for x in self.time_const[layer]) + '};'
+                        neuron = 0
+                        layer += 1
+                    if layer == len(self.gain):
+                        layer = 0
+                        parameter += 1
+                        if print_weights: print
 
     def mutate(self, mutation_rate=1.):
         # mutate value in range [-w - 0.1, 2w + 0.1]
-        for layer_nr, _ in enumerate(self.nn_shape[:-1]):
+        for layer_nr, _ in enumerate(self.nn_shape):
             for neuron in xrange(self.nn_shape[layer_nr]):
                 if random.random() <= mutation_rate:
-                    self.bias[layer_nr][neuron] = perturb(self.bias[layer_nr][neuron])
-                if random.random() <= mutation_rate:
-                    self.time_const[layer_nr][neuron] = perturb(self.time_const[layer_nr][neuron])
-                    if self.time_const[layer_nr][neuron] < 0.:
-                        self.time_const[layer_nr][neuron] = 0.
-
-                for connection in xrange(self.nn_shape[layer_nr+1]):
+                    self.time_const[layer_nr][neuron] = perturb_u(self.time_const[layer_nr][neuron])
+                if layer_nr + 1 < len(self.nn_shape):
                     if random.random() <= mutation_rate:
-                        self.weights[layer_nr][neuron][connection] = perturb(self.weights[layer_nr][neuron][connection])
-                    if neuron == 0:
+                        self.bias[layer_nr][neuron] = perturb(self.bias[layer_nr][neuron])
+                    if random.random() <= mutation_rate:
+                        self.gain[layer_nr][neuron] = perturb_u(self.gain[layer_nr][neuron])
+                    for connection in xrange(self.nn_shape[layer_nr+1]):
                         if random.random() <= mutation_rate:
-                            self.recurrent_weights[layer_nr][connection] = perturb(self.recurrent_weights[layer_nr][connection])
+                            self.weights[layer_nr][neuron][connection] = perturb(self.weights[layer_nr][neuron][connection])
+
+
+import argparse
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Hello.')
+    parser.add_argument("-a", "--agent", type=str, default='', help="The full path to the desired agent")
+    args = parser.parse_args()
+
+    agent = load_nn(args.agent, print_weights=True)
+    for i in xrange(20):
+        print agent.predict(np.array([1., 1.]), 0.05)
 
