@@ -11,10 +11,14 @@ from nn import nn, rnn, ctrnn, load_nn
 
 from mpl_toolkits.mplot3d import Axes3D, proj3d
 import matplotlib.pyplot as plt
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
 
+ax = None
 def plot_population(population, offspring=None, pareto_front_size=0, lim=[[0,0],[0,0],[0,0]]):
+    global ax    # Needed to modify global copy of globvar
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+
     plt.cla()
     fitness_pop=[]
     for ind in population:
@@ -49,6 +53,11 @@ def plot_population(population, offspring=None, pareto_front_size=0, lim=[[0,0],
         agent[0].save_weights('{}{}_weights.csv'.format(log_dir, i), overwrite=True)
 
 def plot_selection(population, pareto_front_size=0, lim=[[0,0],[0,0],[0,0]]):
+    global ax    # Needed to modify global copy of globvar
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+
     if pareto_front_size == 0:
         pareto_front_size = len(population)
 
@@ -91,7 +100,7 @@ def log_population_performance(population, folder_location):
         with open('{}/performance/{}.txt'.format(folder_location, i), 'w') as fp:
             while not done:
                 wind += (np.random.normal(0., 0.1)-wind)*env.DT/(env.DT+0.1)
-                observation, _, done, _ = env.step(ind[0].predict(observation, env.DT), wind=wind)
+                observation, _, done, _ = env.step(ind[0].predict(observation, env.t), wind=wind)
 
                 np.savetxt(fp, [list(chain(*[[env.t], env.y[:], env.state[:], observation[:], [wind]]))], fmt="%s")
 
@@ -110,7 +119,7 @@ def log_population(population, folder_location):
 
 
 def test_agents(weights_fp):
-    agents = [join(weights_fp, f) for f in listdir(weights_fp) if isfile(join(weights_fp, f))]
+    agents = [join(weights_fp, f) for f in listdir(weights_fp) if join(weights_fp, f).endswith(".csv")]
     agents.sort()
     test_alt = 8.
     vel = []
@@ -134,7 +143,7 @@ def test_agents(weights_fp):
         env.set_h0(test_alt)
 
         while not done:
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT))
+            observation, _, done, _ = env.step(actor.predict(observation, env.t))
         
         vel[-1].append(env.y[1])
         tim[-1].append(env.t)
@@ -152,7 +161,7 @@ def test_agents(weights_fp):
         env.set_h0(test_alt)
 
         while not done:
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT))
+            observation, _, done, _ = env.step(actor.predict(observation, env.t))
         
         vel[-1].append(env.y[1])
         tim[-1].append(env.t)
@@ -169,7 +178,7 @@ def test_agents(weights_fp):
         env.set_h0(test_alt)
 
         while not done:
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT))
+            observation, _, done, _ = env.step(actor.predict(observation, env.t))
         
         vel[-1].append(env.y[1])
         tim[-1].append(env.t)
@@ -186,7 +195,7 @@ def test_agents(weights_fp):
         env.set_h0(test_alt)
 
         while not done:
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT))
+            observation, _, done, _ = env.step(actor.predict(observation, env.t))
         
         vel[-1].append(env.y[1])
         tim[-1].append(env.t)
@@ -203,7 +212,7 @@ def test_agents(weights_fp):
         env.set_h0(test_alt)
 
         while not done:
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT))
+            observation, _, done, _ = env.step(actor.predict(observation, env.t))
         
         vel[-1].append(env.y[1])
         tim[-1].append(env.t)
@@ -222,7 +231,7 @@ def test_agents(weights_fp):
         wind = 0
         while not done:
             wind += (np.random.normal(0., 0.2)-wind)*env.DT/(env.DT+0.1)
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT), wind=wind)
+            observation, _, done, _ = env.step(actor.predict(observation, env.t), wind=wind)
 
         vel[-1].append(env.y[1])
         tim[-1].append(env.t)
@@ -239,7 +248,7 @@ def test_agents(weights_fp):
         env.set_h0(test_alt)
 
         while not done:
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT))
+            observation, _, done, _ = env.step(actor.predict(observation, env.t))
             observation[0] = 0
         
         vel[-1].append(env.y[1])
@@ -257,7 +266,7 @@ def test_agents(weights_fp):
         env.set_h0(test_alt)
 
         while not done:
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT))
+            observation, _, done, _ = env.step(actor.predict(observation, env.t))
             observation[1] = 0
         
         vel[-1].append(env.y[1])
@@ -314,7 +323,7 @@ def test_agents(weights_fp):
         while not done:
             wind += (np.random.normal(0., 0.1)-wind)*env.DT/(env.DT+0.1)
             max_wind = max([wind, max_wind], key=abs)
-            observation, _, done, _ = env.step(actor.predict(observation, env.DT), wind=wind)
+            observation, _, done, _ = env.step(actor.predict(observation, env.t), wind=wind)
 
             #env.render()
             obs.append(observation.copy())
@@ -362,8 +371,83 @@ def test_agents(weights_fp):
           #print np.correlate(y[:,2], D[:,0])/len(y[:,2]), np.correlate(y[:,2], D[:,1])/len(y[:,2])
           
     plt.show()
+
+import csv
+def test_agent_sensitivity(weights_fp):
+    agents = [join(weights_fp, f) for f in listdir(weights_fp) if isfile(join(weights_fp, f))]
     
-def test_agent(agent_fp, env):
+    # Get all nn files only
+    for agent_fp in agents:
+        filename, file_extension = os.path.splitext(agent_fp)
+        if file_extension != '.csv':
+            agents.remove(agent_fp)
+
+    # Get non-dominated front
+    #reader = csv.reader(open("{}/pop_fitness.txt".format(weights_fp)), delimiter=" ")
+    #i = 0
+    #fitnesses = []
+    #for row in reader:
+    #    fitnesses.append(np.asarray(row, dtype=np.float64, order='C'))
+    #fitnesses = np.asarray(fitnesses)
+
+    #for i, fitness in enumerate(fitnesses):
+    #    b1 = np.where(fitnesses[:,0] < fitness[0])[0]
+    #    b2 = np.where(fitnesses[:,2] < fitness[2])[0]
+    #    if np.size([x for x in b1 if x in b2]) >0:
+    #       fitnesses = fitnesses[0:i,:]
+    #        break
+
+    #num_non_dominated = np.shape(fitnesses)[0] 
+
+    agents.sort()
+    zero_length = len(agents[0])
+    agents.sort(key=lambda x: x[-13] if np.size(x) == zero_length else x[-14:-12])
+    #agents = agents[0:num_non_dominated]
+
+    vel = []
+    tim = []
+    h = []
+
+    # test 4m performance
+    test_alt = 4.
+    num_runs = 50
+    env = quad_landing(delay=3)
+    env.set_h0(test_alt)
+
+    for agent_fp in agents:
+        vel.append([])
+        tim.append([])
+        h.append([])
+
+        actor = load_nn(agent_fp)
+
+        for i in xrange(num_runs):
+            np.random.seed(i)
+
+            env = quad_landing(delay=int(num_runs/10) + 2)
+            env.set_h0(test_alt)
+
+            actor.reset()
+            done = False
+            observation = env.reset()
+
+            while not done:
+                observation, _, done, _ = env.step(actor.predict(observation, env.t))
+
+            vel[-1].append(env.y[1])
+            tim[-1].append(env.t)
+            h[-1].append(env.y[0])
+
+    with open('{}/sensitivity_v.txt'.format(weights_fp), 'w') as fp:
+        np.savetxt(fp, vel, fmt="%s")
+        
+    with open('{}/sensitivity_t.txt'.format(weights_fp), 'w') as fp:
+        np.savetxt(fp, tim, fmt="%s")
+        
+    with open('{}/sensitivity_h.txt'.format(weights_fp), 'w') as fp:
+        np.savetxt(fp, h, fmt="%s")
+
+def test_agent(agent_fp, env, visualize=True):
     actor = load_nn(agent_fp)
     actor.reset()
 
@@ -379,60 +463,78 @@ def test_agent(agent_fp, env):
     w = []
     wind = 0
     max_wind = 0
-    while not done:
-        wind += (np.random.normal(0., 0.1)-wind)*env.DT/(env.DT+0.1)
-        max_wind = max([wind, max_wind], key=abs)
-        observation, _, done, _ = env.step(actor.predict(observation, env.DT), wind=wind)
-        env.render()
-
-        obs.append(observation.copy())
-        D.append(env.state[:])
-        y.append(env.y.copy())
-        t.append(env.t)
-        w.append(wind)
-        #observation[0] = 0.
-        #observation[1] = 0.
-        #observation = [0., 0.]
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.set_xlabel('time [s]')
-    ax.set_ylim([-.5, 4.])
-    obs = np.array(obs)
-    ax.plot(t, obs[:,0])
-    ax.plot(t, D)
-    ax.plot(t, w)
-
-    # invert velocity sign so it fits in plot
-    y = np.array(y)
-    y[:,1] = -y[:,1]
-    ax.plot(t, y)
-    plt.title(ntpath.basename(agent_fp))
+    T_hist = [[],[],[],[],[]]
     
-    #plt.legend(['obs D', 'obs D dot', 'ground truth D', 'ground truth D dot', 'wind', 'altitude', 'velocity', 'acceleration'])
-    plt.legend(['obs D', 'ground truth D', 'ground truth D dot', 'wind', 'altitude', 'velocity', 'acceleration'])
+    basepath = os.path.dirname(os.path.abspath(__file__))
+    with open('{}/logs/trajectory.txt'.format(basepath), 'w') as fp:
+        while not done:
+            wind += (np.random.normal(0., 0.1)-wind)*env.DT/(env.DT+0.1)
+            max_wind = max([wind, max_wind], key=abs)
+            T = actor.predict(observation, env.t)
+            T_hist[0].append(observation[0])
+            T_hist[1].append(observation[1])
+            T_hist[2].append(env.state[0])
+            T_hist[3].append(env.state[1])
+            T_hist[4].append(T[0])
 
-    print('touched down at {} m/s in {} s'.format(env.y[1], env.t))
+            observation, _, done, _ = env.step(T, wind=wind)
+
+            np.savetxt(fp, [list(chain(*[[env.t], env.y[:], env.state[:], observation[:], [wind]]))], fmt="%s")
+
+            #if visualize:
+            #    env.render()
+
+            obs.append(observation.copy())
+            D.append(env.state[:])
+            y.append(env.y.copy())
+            t.append(env.t)
+            w.append(wind)
+            #observation[0] = 0.
+            #observation[1] = 0.
+            #observation = [0., 0.]
+
+    map_nn(args.agent, T_hist, visualize=visualize)
+
+    if visualize:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.set_xlabel('time [s]')
+        ax.set_ylim([-.5, 4.])
+        obs = np.array(obs)
+        ax.plot(t, obs[:,0])
+        ax.plot(t, D)
+        ax.plot(t, w)
     
-    if 0:
-      D = np.array(D)
-      ax.plot(t, abs(-y[:,2]/(D[:,1] - D[:,0]*D[:,0] + 0.001)))
-      #D = np.array(obs)
-      #ax.plot(t, abs(-y[:,2]/(D[:,1] - D[:,0]*D[:,0] + 0.001)))
-      
-      #print np.correlate(y[:,2], D[:,0])/len(y[:,2]), np.correlate(y[:,2], D[:,1])/len(y[:,2])
+        # invert velocity sign so it fits in plot
+        y = np.array(y)
+        y[:,1] = -y[:,1]
+        ax.plot(t, y)
+        plt.title(ntpath.basename(agent_fp))
     
+        #plt.legend(['obs D', 'obs D dot', 'ground truth D', 'ground truth D dot', 'wind', 'altitude', 'velocity', 'acceleration'])
+        plt.legend(['obs D', 'ground truth D', 'ground truth D dot', 'wind', 'altitude', 'velocity', 'acceleration'])
+
+        print('touched down at {} m/s in {} s'.format(env.y[1], env.t))
+
+        if 0:
+          D = np.array(D)
+          ax.plot(t, abs(-y[:,2]/(D[:,1] - D[:,0]*D[:,0] + 0.001)))
+          #D = np.array(obs)
+          #ax.plot(t, abs(-y[:,2]/(D[:,1] - D[:,0]*D[:,0] + 0.001)))
+          
+          #print np.correlate(y[:,2], D[:,0])/len(y[:,2]), np.correlate(y[:,2], D[:,1])/len(y[:,2])
+ 
     plt.show()
 
-def map_nn(agent_fp):
+def map_nn(agent_fp, T_hist=None, visualize=True):
     actor = load_nn(agent_fp)
     wait = False
     if actor.__class__.__name__ != 'nn':
         wait = True
 
     actor.reset()
-    
-    grid = np.arange(-4,4,0.1)
+
+    grid = np.arange(-10,10.2,0.2)
     T = np.zeros([np.size(grid), np.size(grid)])
 
     i = 0
@@ -441,29 +543,95 @@ def map_nn(agent_fp):
         for Ddot in grid:
             observation = [D, Ddot]
             if wait:
-                for x in xrange(20):
-                    actor.predict(observation, 0.025)
-            T[i,j] = actor.predict(observation, 0.025)
+                for x in xrange(200):
+                    actor.predict(observation, 0.)
+            T[j,i] = actor.predict(observation, 0.)
             j += 1
         j = 0
         i += 1
 
+    basepath = os.path.dirname(os.path.abspath(__file__))
+    with open('{}/logs/thrust_response.txt'.format(basepath), 'w') as fp:
+        np.savetxt(fp, T, fmt="%s")
+
+    with open('{}/logs/thrust_history.txt'.format(basepath), 'w') as fp:
+        np.savetxt(fp, T_hist, fmt="%s")
+
+    min_ind = [(np.abs(T)).argmin() / np.size(grid), (np.abs(T)).argmin() % np.size(grid)]
+    min_ind = np.clip(min_ind, 5, np.size(grid)-5)
+    range0 = range(min_ind[0] - 5, min_ind[0] + 5)
+    range1 = range(min_ind[1] - 5, min_ind[1] + 5)
+
+    zero_thrust = T[np.size(grid)/2,np.size(grid)/2]
+    Dgain = np.mean(np.gradient(T[range0,min_ind[1]])) / (grid[1] - grid[0])
+    setpoint = -zero_thrust / Dgain
+
+    print 'T0: {}, D gradient: {}, D set point: {}, {}'.format(zero_thrust, Dgain, setpoint, grid[min_ind])
+    print 'Ddot gradient: {}'.format(np.mean(np.gradient(T[min_ind[0],range1])) / (grid[1] - grid[0]))
+
     X, Y = np.meshgrid(grid, grid)
+
+    if visualize:
+        fig = plt.figure()
+        ax = fig.gca(projection='3d')
+        ax.plot_surface(X, Y, T)
+        ax.set_zlim([-10,10])
+
+        if T_hist is not None:
+            ax.plot(T_hist[2], T_hist[3], T_hist[4], 'k')
+
+        plt.title(ntpath.basename(agent_fp))
+        plt.xlabel('D')
+        plt.ylabel('Ddot')
+
+        fig = plt.figure()
+        plt.pcolormesh(X,Y,T, cmap=plt.cm.jet, vmin=-8, vmax=5)
+        plt.colorbar()
+
+        plt.title(ntpath.basename(agent_fp))
+        plt.xlabel('D')
+        plt.ylabel('Ddot')
+        #plt.zlabel('T')
+
+        if T_hist is not None:
+            plt.plot(T_hist[0], T_hist[1], 'm')
+            plt.plot(T_hist[2], T_hist[3], 'k')
+
+        plt.show()
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 'True', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'False', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+def print_output(agent_fp, env):
+    actor = load_nn(agent_fp)
+    actor.reset()
+
+    done = False
+    observation = env.reset()
+    observation = [1.,1.]
+    env.set_h0(4.)
     
-    fig = plt.figure()
-    ax = fig.gca(projection='3d')
-    ax.plot_surface(X, Y, T)
+    for i in xrange(20):
+        print actor.predict(observation, env.t)
 
-    plt.title(ntpath.basename(agent_fp))
-
-    plt.show()
-
+    
 import argparse
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Hello.')
+    parser.add_argument("-t", "--test", type=str, default='agent', help="Test to run (agent, agents, print)")
     parser.add_argument("-a", "--agent", type=str, default='', help="The full path to the desired agent")
+    parser.add_argument("-v", "--visualize", type=str2bool, nargs='?', const=True, default='true', help="Whether or not the script should visualize the results")
     args = parser.parse_args()
 
-    test_agent(args.agent, quad_landing(delay=3, noise=0.1, visualize=True))
-    map_nn(args.agent)
+    if args.test == "agent":
+        test_agent(args.agent, quad_landing(visualize=args.visualize), visualize=args.visualize)
+    elif args.test == "agents":
+        test_agent_sensitivity(args.agent)
+    elif args.test == "print":
+        print_output(args.agent, quad_landing(visualize=False))
 

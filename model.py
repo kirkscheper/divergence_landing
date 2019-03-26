@@ -6,6 +6,9 @@ import time
 from collections import deque
 import numpy as np
 
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/ext/gym")
 import gym
 from gym import spaces
 import random
@@ -19,11 +22,14 @@ class quad_landing(gym.Env):
         'video.frames_per_second' : 100
     }
     # delay is time delay in time steps
-    # noise is the std of divergence sensor noise
+    # noise_b is the std of divergence sensor noise
+    # noise_p is the std of divergence sensor noise proportional to the divergence
     # thrust_tc is the motor thrust spin up time constant
-    def __init__(self, delay=1, noise=0.1, thrust_tc=0.05, dt=0.025, visualize=False):
+    def __init__(self, delay=3, noise=0.1, noise_p=0.1, thrust_tc=0.02, dt=0.02, computational_delay_prob=0., visualize=False):
         assert delay > 0
         assert noise >= 0.
+        assert thrust_tc >= 0.
+        assert dt >= 0.
 
         self.G = 9.81
         self.MAX_H = 15.
@@ -34,7 +40,9 @@ class quad_landing(gym.Env):
         self.thrust_tc = thrust_tc
         self.visualize = visualize
         self.delay = delay
-        self.noise_sigma = noise    # applied to divergence
+        self.computational_delay_prob = computational_delay_prob
+        self.noise_b_sigma = noise    # applied to divergence
+        self.noise_p_sigma = noise_p    # applied to divergence
 
         self.viewer = None
 
@@ -70,7 +78,7 @@ class quad_landing(gym.Env):
         self.state[:] = [D, D_dot]
 
         # perform observation of state
-        D += np.random.normal(0., self.noise_sigma)
+        D += np.random.normal(0., self.noise_b_sigma) + D*np.random.normal(0., self.noise_p_sigma)
         D_dot = (D - self.obs[-1][0]) / self.DT
         # low pass filter D dot
         #D_dot = self.obs[-1][1] + self.DT*((D - self.obs[-1][0]) / self.DT - self.obs[-1][1]) / (self.DT + 0.1)
@@ -100,7 +108,9 @@ class quad_landing(gym.Env):
         #print thrust_cmd, self.y[2], (1./0.05)*(thrust_cmd - self.y[2])
         return np.array([self.y[1], self.y[2], (self.thrust_cmd - self.y[2])/(self.DT + self.thrust_tc)])
 
-    def step(self, action, wind=0.):
+    def step(self, action, wind=0., computational_delay_prob=None):
+        if computational_delay_prob is None:
+            computational_delay_prob = self.computational_delay_prob
         # if dt large run two integration steps to still have stable rotor spin up dynamics
         #if self.DT > 0.02:
         #    self.y += (self.dy_dt(action) + [0., wind, 0.])*self.DT/2.
@@ -122,6 +132,11 @@ class quad_landing(gym.Env):
             done = False
 
         #print reward,self.t,self.y[1]
+        
+        # implement random delays in processing
+        if(np.random.random_sample() < self.computational_delay_prob):
+            self.get_observation()
+            return self.step(action, wind=wind, computational_delay_prob=0.)
 
         return self.get_observation(), reward, done, {}
 
@@ -133,6 +148,7 @@ class quad_landing(gym.Env):
         self.t = 0.
         # state is [height, velocity, effective thrust]
         self.y = np.array([5., 0., 0.])
+        # reset deque
         self.obs.clear()
         self.obs.append([0.,0.])
         return self.get_observation()

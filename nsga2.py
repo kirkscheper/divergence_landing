@@ -54,14 +54,15 @@ def mutSet(individual):
 
 def evalLanding(individual):
     # set noise paramters
-    # time delay range [1,4] time steps
+    # time delay range [1,5] time steps
     # divegence sensor noise [0,0.15]s-1
     # thrust time constant [0.02, 0.1]s
-    # time step [1/30, 1/50]s
-    dyn = quad_landing(delay=ceil(3*np.random.random_sample())+1,
-      noise=0.15*np.random.random_sample(),
-      thrust_tc=0.1*np.random.random_sample()+0.02,
-      dt=1./ceil(20*np.random.random_sample() + 30)
+    dyn = quad_landing(delay=ceil(4*np.random.random_sample())+1,
+                       noise=0.1*np.random.random_sample()+0.05,
+                       noise_p=0.25*np.random.random_sample(),
+                       thrust_tc=0.04*np.random.random_sample()+0.005,
+                       dt=1./ceil(20*np.random.random_sample() + 30),
+                       computational_delay_prob=np.random.random_sample()/5.
       )
 
     h0 = [2., 4., 6., 8.]
@@ -78,7 +79,7 @@ def evalLanding(individual):
 
         #energy = 0.
         while not done:
-            obs, _, done, _ = dyn.step(individual[0].predict(obs, dyn.DT))
+            obs, _, done, _ = dyn.step(individual[0].predict(obs, dyn.t))
             #energy += dyn.thrust_cmd + dyn.G
 
         t = dyn.t
@@ -112,7 +113,7 @@ def evalLanding(individual):
 def cxSet(ind1, ind2):
     return ind1, ind2
 
-neural_type = ctrnn    # nn. rnn, ctrnn
+neural_type = nn    # nn. rnn, ctrnn
 
 toolbox.register("individual", tools.initRepeat, creator.Individual, neural_type, 1)
 toolbox.register("population", tools.initRepeat, list, toolbox.individual)
@@ -160,7 +161,8 @@ def main(seed=None):
     print(logbook.stream)
     hof.update(pop)
 
-    log_dir = 'logs/{}/'.format(time.strftime('%y%m%d-%H%M%S'))
+    basepath = os.path.dirname(os.path.abspath(__file__))
+    log_dir = '{}/logs/{}/'.format(basepath, time.strftime('%y%m%d-%H%M%S'))
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
